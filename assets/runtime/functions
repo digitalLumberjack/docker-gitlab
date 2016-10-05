@@ -443,11 +443,20 @@ gitlab_configure_oauth_google() {
   if [[ -n ${OAUTH_GOOGLE_API_KEY} && -n ${OAUTH_GOOGLE_APP_SECRET} ]]; then
     echo "Configuring gitlab::oauth::google..."
     OAUTH_ENABLED=${OAUTH_ENABLED:-true}
-    update_template ${GITLAB_CONFIG} \
-      OAUTH_GOOGLE_API_KEY \
-      OAUTH_GOOGLE_APP_SECRET \
-      OAUTH_GOOGLE_RESTRICT_DOMAIN \
-      OAUTH_GOOGLE_APPROVAL_PROMPT
+    if [[ -n ${OAUTH_GOOGLE_RESTRICT_DOMAIN} ]]; then
+      update_template ${GITLAB_CONFIG} \
+        OAUTH_GOOGLE_API_KEY \
+        OAUTH_GOOGLE_APP_SECRET \
+        OAUTH_GOOGLE_RESTRICT_DOMAIN \
+        OAUTH_GOOGLE_APPROVAL_PROMPT
+    else
+      exec_as_git sed -i "/ hd\: \[{{OAUTH_GOOGLE_RESTRICT_DOMAIN}}\]/d" ${GITLAB_CONFIG}
+      exec_as_git sed -i "s/approval_prompt: '{{OAUTH_GOOGLE_APPROVAL_PROMPT}}',/approval_prompt: '{{OAUTH_GOOGLE_APPROVAL_PROMPT}}' } }/" ${GITLAB_CONFIG}
+      update_template ${GITLAB_CONFIG} \
+        OAUTH_GOOGLE_API_KEY \
+        OAUTH_GOOGLE_APP_SECRET \
+        OAUTH_GOOGLE_APPROVAL_PROMPT
+    fi
   else
     exec_as_git sed -i "/name: 'google_oauth2'/,/{{OAUTH_GOOGLE_RESTRICT_DOMAIN}}/d" ${GITLAB_CONFIG}
   fi
@@ -647,7 +656,24 @@ gitlab_configure_secrets() {
     return 1
   fi
 
-  update_template ${GITLAB_SECRETS_CONFIG} GITLAB_SECRETS_DB_KEY_BASE
+  if [[ -z $GITLAB_SECRETS_SECRET_KEY_BASE ]]; then
+    echo "ERROR: "
+    echo "  Please configure the GITLAB_SECRETS_SECRET_KEY_BASE parameter."
+    echo "  Cannot continue. Aborting..."
+    return 1
+  fi
+
+  if [[ -z $GITLAB_SECRETS_OTP_KEY_BASE ]]; then
+    echo "ERROR: "
+    echo "  Please configure the GITLAB_SECRETS_OTP_KEY_BASE parameter."
+    echo "  Cannot continue. Aborting..."
+    return 1
+  fi
+
+  update_template ${GITLAB_SECRETS_CONFIG} \
+  GITLAB_SECRETS_DB_KEY_BASE \
+  GITLAB_SECRETS_SECRET_KEY_BASE \
+  GITLAB_SECRETS_OTP_KEY_BASE
 }
 
 gitlab_configure_sidekiq() {
@@ -931,7 +957,7 @@ map_uidgid() {
   USERMAP_UID=${USERMAP_UID:-$USERMAP_ORIG_UID}
   if [[ ${USERMAP_UID} != ${USERMAP_ORIG_UID} ]] || [[ ${USERMAP_GID} != ${USERMAP_ORIG_GID} ]]; then
     echo "Mapping UID and GID for ${GITLAB_USER}:${GITLAB_USER} to $USERMAP_UID:$USERMAP_GID"
-    groupmod -g ${USERMAP_GID} ${GITLAB_USER}
+    groupmod -o -g ${USERMAP_GID} ${GITLAB_USER}
     sed -i -e "s|:${USERMAP_ORIG_UID}:${USERMAP_GID}:|:${USERMAP_UID}:${USERMAP_GID}:|" /etc/passwd
     find ${GITLAB_HOME} -path ${GITLAB_DATA_DIR}/\* -prune -o -print0 | xargs -0 chown -h ${GITLAB_USER}:
   fi
@@ -1156,7 +1182,7 @@ install_configuration_templates() {
     if [[ -f ${SSL_CERTIFICATE_PATH} && -f ${SSL_KEY_PATH} && -f ${SSL_DHPARAM_PATH} ]]; then
       install_template root: nginx/gitlab-ssl ${GITLAB_NGINX_CONFIG}
     else
-      echo "SSL keys and certificates were not found."
+      echo "SSL Key, SSL Certificate and DHParam were not found."
       echo "Assuming that the container is running behind a HTTPS enabled load balancer."
       install_template root: nginx/gitlab ${GITLAB_NGINX_CONFIG}
     fi
